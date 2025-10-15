@@ -395,122 +395,113 @@ app.post('/api/reports', authenticateToken, upload.single('photo'), async (req: 
     const createdReport = result.rows[0];
     console.log('Report created successfully:', createdReport.id);
 
-    // Send WhatsApp notification to the user
-    try {
-      if (mobile_number) {
-        console.log('Sending WhatsApp notification...');
-        const reportData = {
-          reportId: createdReport.id,
-          fullName: full_name,
-          locationName: location_name || 'Location not specified',
-          status: 'pending'
-        };
-
-        // Generate message text
-        const message = whatsappService.generateReportSubmissionMessage(reportData);
-        
-        // Send using text notification (works without template)
-        const whatsappResult = await whatsappService.sendNotification(mobile_number, message);
-        
-        if (whatsappResult.success) {
-          console.log('WhatsApp notification sent successfully for report:', createdReport.id);
-        } else {
-          console.error('Failed to send WhatsApp notification:', whatsappResult.error);
-        }
-      } else {
-        console.log('No mobile number provided, skipping WhatsApp notification');
-      }
-    } catch (whatsappError) {
-      console.error('WhatsApp notification error:', whatsappError);
-      // Don't fail the report submission if WhatsApp fails
-    }
-
-    // Send email notification to the user
-    try {
-      console.log('Sending email notification...');
-      
-      // Get user's email address
-      const userResult = await pool.query(
-        'SELECT email FROM users WHERE id = $1',
-        [req.user.userId]
-      );
-      
-      if (userResult.rows.length > 0) {
-        const userEmail = userResult.rows[0].email;
-        console.log('Sending email to:', userEmail);
-        
-        // Create email content
-        const subject = `Report Submitted Successfully - ID: ${createdReport.id}`;
-        const html = `
-          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9fafb; border-radius: 8px;">
-            <div style="background-color: #0ea5e9; padding: 20px; border-radius: 8px 8px 0 0; text-align: center;">
-              <h1 style="color: white; margin: 0;">Blue Tap Connect</h1>
-            </div>
-            <div style="background-color: white; padding: 30px; border-radius: 0 0 8px 8px;">
-              <h2 style="color: #0ea5e9; margin-top: 0;">Report Submitted Successfully! ✅</h2>
-              <p>Dear <strong>${full_name}</strong>,</p>
-              <p>Your water pipe issue report has been successfully submitted and received. Our team will review it shortly.</p>
-              
-              <div style="background-color: #f1f5f9; padding: 20px; border-radius: 8px; margin: 20px 0;">
-                <h3 style="color: #334155; margin-top: 0;">Report Details:</h3>
-                <p style="margin: 8px 0;"><strong>Report ID:</strong> ${createdReport.id}</p>
-                <p style="margin: 8px 0;"><strong>Status:</strong> <span style="color: #f59e0b; font-weight: bold;">Pending</span></p>
-                <p style="margin: 8px 0;"><strong>Submitted By:</strong> ${full_name}</p>
-                <p style="margin: 8px 0;"><strong>Mobile Number:</strong> ${mobile_number}</p>
-                <p style="margin: 8px 0;"><strong>Location:</strong> ${location_name || 'Not specified'}</p>
-                ${notes ? `<p style="margin: 8px 0;"><strong>Notes:</strong> ${notes}</p>` : ''}
-                <p style="margin: 8px 0;"><strong>Submitted On:</strong> ${new Date().toLocaleString()}</p>
-              </div>
-              
-              <div style="background-color: #dbeafe; padding: 15px; border-left: 4px solid #0ea5e9; margin: 20px 0;">
-                <p style="margin: 0; color: #1e40af;"><strong>What happens next?</strong></p>
-                <ul style="color: #1e40af; margin: 10px 0;">
-                  <li>Our team will review your report</li>
-                  <li>A maintenance technician will be assigned</li>
-                  <li>You'll receive updates via email and WhatsApp</li>
-                  <li>You can track your report status in the app</li>
-                </ul>
-              </div>
-              
-              <p style="color: #64748b; font-size: 14px; margin-top: 30px;">
-                You will receive email notifications when:
-              </p>
-              <ul style="color: #64748b; font-size: 14px;">
-                <li>A technician is assigned to your report</li>
-                <li>Work begins on your issue</li>
-                <li>Your issue is resolved</li>
-              </ul>
-              
-              <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 30px 0;">
-              
-              <p style="color: #64748b; font-size: 12px; text-align: center; margin: 0;">
-                Thank you for using Blue Tap Connect<br>
-                For any questions, please contact our support team
-              </p>
-            </div>
-          </div>
-        `;
-        
-        const emailSuccess = await emailService.sendEmail({
-          to: userEmail,
-          subject: subject,
-          html: html
-        });
-        
-        if (emailSuccess) {
-          console.log('✅ Email notification sent successfully to:', userEmail);
-        } else {
-          console.error('❌ Failed to send email notification to:', userEmail);
-        }
-      } else {
-        console.log('User email not found for ID:', req.user.userId);
-      }
-    } catch (emailError) {
-      console.error('Email notification error:', emailError);
-      // Don't fail the report submission if email fails
-    }
-
+    // Send response immediately
     res.json(createdReport);
+
+    // Send notifications asynchronously (non-blocking)
+    setImmediate(async () => {
+      // Send WhatsApp notification
+      try {
+        if (mobile_number) {
+          console.log('Sending WhatsApp notification...');
+          const reportData = {
+            reportId: createdReport.id,
+            fullName: full_name,
+            locationName: location_name || 'Location not specified',
+            status: 'pending'
+          };
+
+          const message = whatsappService.generateReportSubmissionMessage(reportData);
+          const whatsappResult = await whatsappService.sendNotification(mobile_number, message);
+          
+          if (whatsappResult.success) {
+            console.log('WhatsApp notification sent successfully for report:', createdReport.id);
+          } else {
+            console.error('Failed to send WhatsApp notification:', whatsappResult.error);
+          }
+        }
+      } catch (whatsappError) {
+        console.error('WhatsApp notification error:', whatsappError);
+      }
+
+      // Send email notification
+      try {
+        const userResult = await pool.query(
+          'SELECT email FROM users WHERE id = $1',
+          [req.user.userId]
+        );
+        
+        if (userResult.rows.length > 0) {
+          const userEmail = userResult.rows[0].email;
+          console.log('Sending email to:', userEmail);
+          
+          const subject = `Report Submitted Successfully - ID: ${createdReport.id}`;
+          const html = `
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9fafb; border-radius: 8px;">
+              <div style="background-color: #0ea5e9; padding: 20px; border-radius: 8px 8px 0 0; text-align: center;">
+                <h1 style="color: white; margin: 0;">Blue Tap Connect</h1>
+              </div>
+              <div style="background-color: white; padding: 30px; border-radius: 0 0 8px 8px;">
+                <h2 style="color: #0ea5e9; margin-top: 0;">Report Submitted Successfully! ✅</h2>
+                <p>Dear <strong>${full_name}</strong>,</p>
+                <p>Your water pipe issue report has been successfully submitted and received. Our team will review it shortly.</p>
+                
+                <div style="background-color: #f1f5f9; padding: 20px; border-radius: 8px; margin: 20px 0;">
+                  <h3 style="color: #334155; margin-top: 0;">Report Details:</h3>
+                  <p style="margin: 8px 0;"><strong>Report ID:</strong> ${createdReport.id}</p>
+                  <p style="margin: 8px 0;"><strong>Status:</strong> <span style="color: #f59e0b; font-weight: bold;">Pending</span></p>
+                  <p style="margin: 8px 0;"><strong>Submitted By:</strong> ${full_name}</p>
+                  <p style="margin: 8px 0;"><strong>Mobile Number:</strong> ${mobile_number}</p>
+                  <p style="margin: 8px 0;"><strong>Location:</strong> ${location_name || 'Not specified'}</p>
+                  ${notes ? `<p style="margin: 8px 0;"><strong>Notes:</strong> ${notes}</p>` : ''}
+                  <p style="margin: 8px 0;"><strong>Submitted On:</strong> ${new Date().toLocaleString()}</p>
+                </div>
+                
+                <div style="background-color: #dbeafe; padding: 15px; border-left: 4px solid #0ea5e9; margin: 20px 0;">
+                  <p style="margin: 0; color: #1e40af;"><strong>What happens next?</strong></p>
+                  <ul style="color: #1e40af; margin: 10px 0;">
+                    <li>Our team will review your report</li>
+                    <li>A maintenance technician will be assigned</li>
+                    <li>You'll receive updates via email and WhatsApp</li>
+                    <li>You can track your report status in the app</li>
+                  </ul>
+                </div>
+                
+                <p style="color: #64748b; font-size: 14px; margin-top: 30px;">
+                  You will receive email notifications when:
+                </p>
+                <ul style="color: #64748b; font-size: 14px;">
+                  <li>A technician is assigned to your report</li>
+                  <li>Work begins on your issue</li>
+                  <li>Your issue is resolved</li>
+                </ul>
+                
+                <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 30px 0;">
+                
+                <p style="color: #64748b; font-size: 12px; text-align: center; margin: 0;">
+                  Thank you for using Blue Tap Connect<br>
+                  For any questions, please contact our support team
+                </p>
+              </div>
+            </div>
+          `;
+          
+          const emailSuccess = await emailService.sendEmail({
+            to: userEmail,
+            subject: subject,
+            html: html
+          });
+          
+          if (emailSuccess) {
+            console.log('✅ Email notification sent successfully to:', userEmail);
+          } else {
+            console.error('❌ Failed to send email notification to:', userEmail);
+          }
+        }
+      } catch (emailError) {
+        console.error('Email notification error:', emailError);
+      }
+    });
   } catch (error) {
     console.error('=== CREATE REPORT ERROR ===');
     console.error('Error type:', error.constructor.name);
