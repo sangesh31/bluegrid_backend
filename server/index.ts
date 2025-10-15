@@ -131,6 +131,22 @@ const authenticateToken = async (req: any, res: any, next: any) => {
   }
 };
 
+// Root route
+app.get('/', (req, res) => {
+  res.json({ 
+    status: 'ok', 
+    message: 'BlueGrid Backend API is running',
+    version: '1.0.0',
+    endpoints: {
+      health: '/api/health',
+      auth: '/api/auth/*',
+      reports: '/api/reports',
+      schedules: '/api/schedules',
+      profile: '/api/profile'
+    }
+  });
+});
+
 // Health check
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', message: 'Server is running' });
