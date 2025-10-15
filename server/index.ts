@@ -708,144 +708,142 @@ app.put('/api/reports/:reportId/assign', authenticateToken, async (req: any, res
 
     const updatedReport = result.rows[0];
 
-    // Send WhatsApp notifications
-    try {
-      // Get technician and reporter details
-      const technicianResult = await pool.query(
-        'SELECT p.full_name, p.phone FROM profiles p WHERE p.id = $1',
-        [assigned_technician_id]
-      );
+    // Send response immediately
+    res.json(updatedReport);
 
-      if (technicianResult.rows.length > 0 && updatedReport.mobile_number) {
-        const technician = technicianResult.rows[0];
-        
-        // Send notification to the reporter
-        const reporterData = {
-          reportId: updatedReport.id,
-          fullName: updatedReport.full_name,
-          status: 'assigned',
-          technicianName: technician.full_name,
-          locationName: updatedReport.location_name || updatedReport.address
-        };
-
-        const reporterMessage = whatsappService.generateStatusUpdateMessage(reporterData);
-        const reporterNotification = await whatsappService.sendNotification(
-          updatedReport.mobile_number, 
-          reporterMessage
+    // Send notifications asynchronously (non-blocking)
+    setImmediate(async () => {
+      // Send WhatsApp notifications
+      try {
+        const technicianResult = await pool.query(
+          'SELECT p.full_name, p.phone FROM profiles p WHERE p.id = $1',
+          [assigned_technician_id]
         );
-        
-        if (reporterNotification.success) {
-          console.log('WhatsApp notification sent to reporter for assignment:', updatedReport.id);
-        }
 
-        // Send notification to the technician
-        if (technician.phone) {
-          const technicianData = {
+        if (technicianResult.rows.length > 0 && updatedReport.mobile_number) {
+          const technician = technicianResult.rows[0];
+          
+          // Send notification to the reporter
+          const reporterData = {
             reportId: updatedReport.id,
+            fullName: updatedReport.full_name,
+            status: 'assigned',
             technicianName: technician.full_name,
-            locationName: updatedReport.location_name || updatedReport.address,
-            reporterName: updatedReport.full_name
+            locationName: updatedReport.location_name || updatedReport.address
           };
 
-          const technicianMessage = whatsappService.generateTechnicianAssignmentMessage(technicianData);
-          const technicianNotification = await whatsappService.sendNotification(
-            technician.phone, 
-            technicianMessage
+          const reporterMessage = whatsappService.generateStatusUpdateMessage(reporterData);
+          const reporterNotification = await whatsappService.sendNotification(
+            updatedReport.mobile_number, 
+            reporterMessage
           );
           
-          if (technicianNotification.success) {
-            console.log('WhatsApp notification sent to technician for assignment:', updatedReport.id);
+          if (reporterNotification.success) {
+            console.log('WhatsApp notification sent to reporter for assignment:', updatedReport.id);
+          }
+
+          // Send notification to the technician
+          if (technician.phone) {
+            const technicianData = {
+              reportId: updatedReport.id,
+              technicianName: technician.full_name,
+              locationName: updatedReport.location_name || updatedReport.address,
+              reporterName: updatedReport.full_name
+            };
+
+            const technicianMessage = whatsappService.generateTechnicianAssignmentMessage(technicianData);
+            const technicianNotification = await whatsappService.sendNotification(
+              technician.phone, 
+              technicianMessage
+            );
+            
+            if (technicianNotification.success) {
+              console.log('WhatsApp notification sent to technician for assignment:', updatedReport.id);
+            }
           }
         }
+      } catch (whatsappError) {
+        console.error('WhatsApp notification error during assignment:', whatsappError);
       }
-    } catch (whatsappError) {
-      console.error('WhatsApp notification error during assignment:', whatsappError);
-      // Don't fail the assignment if WhatsApp fails
-    }
 
-    // Send email notification to the reporter
-    try {
-      console.log('Sending email notification for technician assignment...');
-      
-      // Get reporter's email and technician details
-      const reporterResult = await pool.query(
-        'SELECT u.email FROM users u JOIN pipe_reports r ON u.id = r.user_id WHERE r.id = $1',
-        [reportId]
-      );
-      
-      const technicianResult = await pool.query(
-        'SELECT p.full_name, p.phone FROM profiles p WHERE p.id = $1',
-        [assigned_technician_id]
-      );
-      
-      if (reporterResult.rows.length > 0 && technicianResult.rows.length > 0) {
-        const reporterEmail = reporterResult.rows[0].email;
-        const technicianName = technicianResult.rows[0].full_name;
-        const technicianPhone = technicianResult.rows[0].phone || 'Not provided';
+      // Send email notification
+      try {
+        const reporterResult = await pool.query(
+          'SELECT u.email FROM users u JOIN pipe_reports r ON u.id = r.user_id WHERE r.id = $1',
+          [reportId]
+        );
         
-        console.log('Sending assignment email to:', reporterEmail);
+        const technicianResult = await pool.query(
+          'SELECT p.full_name, p.phone FROM profiles p WHERE p.id = $1',
+          [assigned_technician_id]
+        );
         
-        const subject = `Technician Assigned - Report ID: ${updatedReport.id}`;
-        const html = `
-          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9fafb; border-radius: 8px;">
-            <div style="background-color: #0ea5e9; padding: 20px; border-radius: 8px 8px 0 0; text-align: center;">
-              <h1 style="color: white; margin: 0;">Blue Tap Connect</h1>
+        if (reporterResult.rows.length > 0 && technicianResult.rows.length > 0) {
+          const reporterEmail = reporterResult.rows[0].email;
+          const technicianName = technicianResult.rows[0].full_name;
+          const technicianPhone = technicianResult.rows[0].phone || 'Not provided';
+          
+          console.log('Sending assignment email to:', reporterEmail);
+          
+          const subject = `Technician Assigned - Report ID: ${updatedReport.id}`;
+          const html = `
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9fafb; border-radius: 8px;">
+              <div style="background-color: #0ea5e9; padding: 20px; border-radius: 8px 8px 0 0; text-align: center;">
+                <h1 style="color: white; margin: 0;">Blue Tap Connect</h1>
+              </div>
+              <div style="background-color: white; padding: 30px; border-radius: 0 0 8px 8px;">
+                <h2 style="color: #10b981; margin-top: 0;">Technician Assigned to Your Report! 👨‍🔧</h2>
+                <p>Dear <strong>${updatedReport.full_name}</strong>,</p>
+                <p>Good news! A maintenance technician has been assigned to your water pipe issue report.</p>
+                
+                <div style="background-color: #f1f5f9; padding: 20px; border-radius: 8px; margin: 20px 0;">
+                  <h3 style="color: #334155; margin-top: 0;">Report Details:</h3>
+                  <p style="margin: 8px 0;"><strong>Report ID:</strong> ${updatedReport.id}</p>
+                  <p style="margin: 8px 0;"><strong>Status:</strong> <span style="color: #10b981; font-weight: bold;">Assigned</span></p>
+                  <p style="margin: 8px 0;"><strong>Location:</strong> ${updatedReport.location_name || updatedReport.address}</p>
+                </div>
+                
+                <div style="background-color: #dcfce7; padding: 20px; border-radius: 8px; margin: 20px 0;">
+                  <h3 style="color: #166534; margin-top: 0;">Assigned Technician:</h3>
+                  <p style="margin: 8px 0;"><strong>Name:</strong> ${technicianName}</p>
+                  <p style="margin: 8px 0;"><strong>Contact:</strong> ${technicianPhone}</p>
+                </div>
+                
+                <div style="background-color: #dbeafe; padding: 15px; border-left: 4px solid #0ea5e9; margin: 20px 0;">
+                  <p style="margin: 0; color: #1e40af;"><strong>What happens next?</strong></p>
+                  <ul style="color: #1e40af; margin: 10px 0;">
+                    <li>The technician will accept the assignment</li>
+                    <li>They will visit the location to fix the issue</li>
+                    <li>You'll receive updates when work begins and completes</li>
+                  </ul>
+                </div>
+                
+                <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 30px 0;">
+                
+                <p style="color: #64748b; font-size: 12px; text-align: center; margin: 0;">
+                  Thank you for using Blue Tap Connect<br>
+                  For any questions, please contact our support team
+                </p>
+              </div>
             </div>
-            <div style="background-color: white; padding: 30px; border-radius: 0 0 8px 8px;">
-              <h2 style="color: #10b981; margin-top: 0;">Technician Assigned to Your Report! 👨‍🔧</h2>
-              <p>Dear <strong>${updatedReport.full_name}</strong>,</p>
-              <p>Good news! A maintenance technician has been assigned to your water pipe issue report.</p>
-              
-              <div style="background-color: #f1f5f9; padding: 20px; border-radius: 8px; margin: 20px 0;">
-                <h3 style="color: #334155; margin-top: 0;">Report Details:</h3>
-                <p style="margin: 8px 0;"><strong>Report ID:</strong> ${updatedReport.id}</p>
-                <p style="margin: 8px 0;"><strong>Status:</strong> <span style="color: #10b981; font-weight: bold;">Assigned</span></p>
-                <p style="margin: 8px 0;"><strong>Location:</strong> ${updatedReport.location_name || updatedReport.address}</p>
-              </div>
-              
-              <div style="background-color: #dcfce7; padding: 20px; border-radius: 8px; margin: 20px 0;">
-                <h3 style="color: #166534; margin-top: 0;">Assigned Technician:</h3>
-                <p style="margin: 8px 0;"><strong>Name:</strong> ${technicianName}</p>
-                <p style="margin: 8px 0;"><strong>Contact:</strong> ${technicianPhone}</p>
-              </div>
-              
-              <div style="background-color: #dbeafe; padding: 15px; border-left: 4px solid #0ea5e9; margin: 20px 0;">
-                <p style="margin: 0; color: #1e40af;"><strong>What happens next?</strong></p>
-                <ul style="color: #1e40af; margin: 10px 0;">
-                  <li>The technician will accept the assignment</li>
-                  <li>They will visit the location to fix the issue</li>
-                  <li>You'll receive updates when work begins and completes</li>
-                </ul>
-              </div>
-              
-              <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 30px 0;">
-              
-              <p style="color: #64748b; font-size: 12px; text-align: center; margin: 0;">
-                Thank you for using Blue Tap Connect<br>
-                For any questions, please contact our support team
-              </p>
-            </div>
-          </div>
-        `;
-        
-        const emailSuccess = await emailService.sendEmail({
-          to: reporterEmail,
-          subject: subject,
-          html: html
-        });
-        
-        if (emailSuccess) {
-          console.log('✅ Assignment email sent successfully to:', reporterEmail);
-        } else {
-          console.error('❌ Failed to send assignment email to:', reporterEmail);
+          `;
+          
+          const emailSuccess = await emailService.sendEmail({
+            to: reporterEmail,
+            subject: subject,
+            html: html
+          });
+          
+          if (emailSuccess) {
+            console.log('✅ Assignment email sent successfully to:', reporterEmail);
+          } else {
+            console.error('❌ Failed to send assignment email to:', reporterEmail);
+          }
         }
+      } catch (emailError) {
+        console.error('Email notification error during assignment:', emailError);
       }
-    } catch (emailError) {
-      console.error('Email notification error during assignment:', emailError);
-      // Don't fail the assignment if email fails
-    }
-
-    res.json(updatedReport);
+    });
   } catch (error) {
     console.error('Assign technician error:', error);
     res.status(500).json({ error: 'Internal server error' });
