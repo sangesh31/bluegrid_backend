@@ -59,12 +59,17 @@ app.use((req, res, next) => {
   next();
 });
 
-// Database connection
+// Database connection with optimized pooling
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL || 'postgresql://neondb_owner:npg_GLsYC61DhqOm@ep-curly-rain-adwexyl1-pooler.c-2.us-east-1.aws.neon.tech/neondb?sslmode=require',
   ssl: {
     rejectUnauthorized: false
-  }
+  },
+  max: 20, // Maximum pool size
+  idleTimeoutMillis: 30000, // Close idle clients after 30 seconds
+  connectionTimeoutMillis: 10000, // Return error after 10 seconds if connection not available
+  keepAlive: true,
+  keepAliveInitialDelayMillis: 10000
 });
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-this-in-production';
@@ -137,6 +142,7 @@ app.get('/', (req, res) => {
     status: 'ok', 
     message: 'BlueGrid Backend API is running',
     version: '1.0.0',
+    uptime: process.uptime(),
     endpoints: {
       health: '/api/health',
       auth: '/api/auth/*',
@@ -147,9 +153,28 @@ app.get('/', (req, res) => {
   });
 });
 
-// Health check
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', message: 'Server is running' });
+// Health check with DB ping
+app.get('/api/health', async (req, res) => {
+  try {
+    await pool.query('SELECT 1');
+    res.json({ 
+      status: 'ok', 
+      message: 'Server is running',
+      database: 'connected',
+      uptime: process.uptime()
+    });
+  } catch (error) {
+    res.status(503).json({ 
+      status: 'error', 
+      message: 'Database connection failed',
+      database: 'disconnected'
+    });
+  }
+});
+
+// Keep-alive endpoint to prevent cold starts
+app.get('/api/ping', (req, res) => {
+  res.json({ pong: true, timestamp: Date.now() });
 });
 
 // Auth endpoints
@@ -1909,8 +1934,23 @@ app.post('/api/email/report-status', authenticateToken, async (req: any, res) =>
   }
 });
 
+// Add timeout middleware for all requests
+app.use((req, res, next) => {
+  // Set timeout to 30 seconds
+  req.setTimeout(30000);
+  res.setTimeout(30000);
+  next();
+});
+
+// Warm up database connection on startup
+pool.query('SELECT 1').then(() => {
+  console.log('✅ Database connection established');
+}).catch(err => {
+  console.error('❌ Database connection failed:', err);
+});
+
 // Start server
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+const server = app.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
   console.log(`API available at http://localhost:${PORT}/api`);
 });
