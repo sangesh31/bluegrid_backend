@@ -1504,12 +1504,13 @@ app.post('/api/schedules/create', authenticateToken, async (req: any, res) => {
     }
 
     // Try to insert with user_id, fall back to without if column doesn't exist
+    let createdSchedule;
     try {
       const result = await pool.query(
         'INSERT INTO water_schedules (controller_id, area, user_id, scheduled_open_time, scheduled_close_time, is_active) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
         [req.user.userId, area, user_id || null, scheduled_open_time, scheduled_close_time, true]
       );
-      res.json(result.rows[0]);
+      createdSchedule = result.rows[0];
     } catch (insertError: any) {
       // If user_id column doesn't exist, try without it
       if (insertError.code === '42703') { // undefined_column error
@@ -1518,10 +1519,95 @@ app.post('/api/schedules/create', authenticateToken, async (req: any, res) => {
           'INSERT INTO water_schedules (controller_id, area, scheduled_open_time, scheduled_close_time, is_active) VALUES ($1, $2, $3, $4, $5) RETURNING *',
           [req.user.userId, area, scheduled_open_time, scheduled_close_time, true]
         );
-        res.json(result.rows[0]);
+        createdSchedule = result.rows[0];
       } else {
         throw insertError;
       }
+    }
+
+    // Send response immediately
+    res.json(createdSchedule);
+
+    // Send email notification asynchronously
+    if (user_id) {
+      setImmediate(async () => {
+        try {
+          // Get resident's email and details
+          const residentResult = await pool.query(
+            'SELECT u.email, p.full_name, p.address FROM users u JOIN profiles p ON u.id = p.id WHERE u.id = $1',
+            [user_id]
+          );
+
+          if (residentResult.rows.length > 0) {
+            const resident = residentResult.rows[0];
+            
+            // Format times for display
+            const openTime = new Date(scheduled_open_time).toLocaleString('en-IN', {
+              dateStyle: 'medium',
+              timeStyle: 'short',
+              timeZone: 'Asia/Kolkata'
+            });
+            const closeTime = new Date(scheduled_close_time).toLocaleString('en-IN', {
+              dateStyle: 'medium',
+              timeStyle: 'short',
+              timeZone: 'Asia/Kolkata'
+            });
+
+            const subject = `Water Supply Schedule - ${area}`;
+            const html = `
+              <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9fafb; border-radius: 8px;">
+                <div style="background-color: #0ea5e9; padding: 20px; border-radius: 8px 8px 0 0; text-align: center;">
+                  <h1 style="color: white; margin: 0;">💧 Blue Tap Connect</h1>
+                </div>
+                <div style="background-color: white; padding: 30px; border-radius: 0 0 8px 8px;">
+                  <h2 style="color: #0ea5e9; margin-top: 0;">Water Supply Schedule Created</h2>
+                  <p>Dear <strong>${resident.full_name}</strong>,</p>
+                  <p>A new water supply schedule has been created for your area.</p>
+                  
+                  <div style="background-color: #f1f5f9; padding: 20px; border-radius: 8px; margin: 20px 0;">
+                    <h3 style="color: #334155; margin-top: 0;">Schedule Details:</h3>
+                    <p style="margin: 8px 0;"><strong>Area:</strong> ${area}</p>
+                    <p style="margin: 8px 0;"><strong>Address:</strong> ${resident.address || 'Your registered address'}</p>
+                    <p style="margin: 8px 0; color: #10b981; font-size: 18px;"><strong>⏰ Water Supply Timing:</strong></p>
+                    <p style="margin: 8px 0; padding-left: 20px;"><strong>Opens:</strong> ${openTime}</p>
+                    <p style="margin: 8px 0; padding-left: 20px;"><strong>Closes:</strong> ${closeTime}</p>
+                  </div>
+                  
+                  <div style="background-color: #dbeafe; padding: 15px; border-left: 4px solid #0ea5e9; margin: 20px 0;">
+                    <p style="margin: 0; color: #1e40af;"><strong>📌 Important:</strong></p>
+                    <ul style="color: #1e40af; margin: 10px 0;">
+                      <li>Please ensure your taps are ready during the scheduled time</li>
+                      <li>Store sufficient water for your needs</li>
+                      <li>Report any issues immediately through the app</li>
+                    </ul>
+                  </div>
+                  
+                  <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 30px 0;">
+                  
+                  <p style="color: #64748b; font-size: 12px; text-align: center; margin: 0;">
+                    Thank you for using Blue Tap Connect<br>
+                    For any questions, please contact our support team
+                  </p>
+                </div>
+              </div>
+            `;
+
+            const emailSuccess = await emailService.sendEmail({
+              to: resident.email,
+              subject: subject,
+              html: html
+            });
+
+            if (emailSuccess) {
+              console.log('✅ Schedule notification email sent to:', resident.email);
+            } else {
+              console.error('❌ Failed to send schedule notification email');
+            }
+          }
+        } catch (emailError) {
+          console.error('Email notification error for schedule:', emailError);
+        }
+      });
     }
   } catch (error) {
     console.error('Create schedule error:', error);
