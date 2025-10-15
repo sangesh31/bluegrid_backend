@@ -1646,7 +1646,42 @@ app.put('/api/schedules/:scheduleId/open', authenticateToken, async (req: any, r
       [scheduleId]
     );
 
-    res.json(result.rows[0]);
+    const openedSchedule = result.rows[0];
+
+    // Send response immediately
+    res.json(openedSchedule);
+
+    // Send email notification asynchronously
+    setImmediate(async () => {
+      try {
+        // Get resident email if user_id is set
+        if (openedSchedule.user_id) {
+          const residentResult = await pool.query(
+            'SELECT u.email, p.full_name FROM users u JOIN profiles p ON u.id = p.id WHERE u.id = $1',
+            [openedSchedule.user_id]
+          );
+
+          if (residentResult.rows.length > 0) {
+            const resident = residentResult.rows[0];
+            
+            const emailSuccess = await emailService.sendWaterSupplyOpenEmail(
+              resident.email,
+              resident.full_name,
+              openedSchedule.area,
+              scheduleId
+            );
+
+            if (emailSuccess) {
+              console.log('✅ Water supply open email sent to:', resident.email);
+            } else {
+              console.error('❌ Failed to send water supply open email to:', resident.email);
+            }
+          }
+        }
+      } catch (emailError) {
+        console.error('Email notification error for water supply open:', emailError);
+      }
+    });
   } catch (error) {
     console.error('Open water error:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -1684,7 +1719,42 @@ app.put('/api/schedules/:scheduleId/close', authenticateToken, async (req: any, 
       [scheduleId]
     );
 
-    res.json(result.rows[0]);
+    const closedSchedule = result.rows[0];
+
+    // Send response immediately
+    res.json(closedSchedule);
+
+    // Send email notification asynchronously
+    setImmediate(async () => {
+      try {
+        // Get resident email if user_id is set
+        if (closedSchedule.user_id) {
+          const residentResult = await pool.query(
+            'SELECT u.email, p.full_name FROM users u JOIN profiles p ON u.id = p.id WHERE u.id = $1',
+            [closedSchedule.user_id]
+          );
+
+          if (residentResult.rows.length > 0) {
+            const resident = residentResult.rows[0];
+            
+            const emailSuccess = await emailService.sendWaterSupplyCloseEmail(
+              resident.email,
+              resident.full_name,
+              closedSchedule.area,
+              scheduleId
+            );
+
+            if (emailSuccess) {
+              console.log('✅ Water supply close email sent to:', resident.email);
+            } else {
+              console.error('❌ Failed to send water supply close email to:', resident.email);
+            }
+          }
+        }
+      } catch (emailError) {
+        console.error('Email notification error for water supply close:', emailError);
+      }
+    });
   } catch (error) {
     console.error('Close water error:', error);
     res.status(500).json({ error: 'Internal server error' });

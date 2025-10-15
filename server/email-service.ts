@@ -45,6 +45,7 @@ class EmailService {
   async sendEmail(options: EmailOptions): Promise<boolean> {
     if (!this.transporter) {
       console.error('❌ Email transporter not initialized');
+      console.error('❌ Check your SMTP environment variables in .env file');
       return false;
     }
 
@@ -57,12 +58,31 @@ class EmailService {
         html: options.html || options.text,
       };
 
-      console.log('📤 Sending email to:', options.to);
+      console.log('📤 Attempting to send email...');
+      console.log('   To:', options.to);
+      console.log('   Subject:', options.subject);
+      console.log('   From:', mailOptions.from);
+      
       const info = await this.transporter.sendMail(mailOptions);
-      console.log('✅ Email sent successfully:', info.messageId);
+      console.log('✅ Email sent successfully!');
+      console.log('   Message ID:', info.messageId);
+      console.log('   Response:', info.response);
       return true;
-    } catch (error) {
-      console.error('❌ Failed to send email:', error);
+    } catch (error: any) {
+      console.error('❌ Failed to send email');
+      console.error('   Error message:', error.message);
+      console.error('   Error code:', error.code);
+      console.error('   Error details:', error);
+      
+      // Provide helpful error messages
+      if (error.code === 'EAUTH') {
+        console.error('   ⚠️  Authentication failed. Check SMTP_USER and SMTP_PASSWORD in .env');
+      } else if (error.code === 'ECONNECTION') {
+        console.error('   ⚠️  Connection failed. Check SMTP_HOST and SMTP_PORT in .env');
+      } else if (error.code === 'ETIMEDOUT') {
+        console.error('   ⚠️  Connection timeout. Check your internet connection and firewall');
+      }
+      
       return false;
     }
   }
@@ -107,6 +127,80 @@ class EmailService {
         <p>This is a test email from Blue Tap Connect.</p>
         <p>If you received this, your email configuration is working correctly! ✅</p>
         <p>Timestamp: ${new Date().toLocaleString()}</p>
+      </div>
+    `;
+    return this.sendEmail({ to, subject, html });
+  }
+
+  async sendWaterSupplyOpenEmail(to: string, userName: string, area: string, scheduleId: string): Promise<boolean> {
+    const subject = `Water Supply Opened - ${area}`;
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9fafb; border-radius: 8px;">
+        <div style="background-color: #10b981; padding: 20px; border-radius: 8px 8px 0 0; text-align: center;">
+          <h1 style="color: white; margin: 0;">💧 Water Supply Opened</h1>
+        </div>
+        <div style="background-color: white; padding: 30px; border-radius: 0 0 8px 8px;">
+          <h2 style="color: #10b981; margin-top: 0;">Water Supply is Now Active! 🚰</h2>
+          <p>Dear <strong>${userName}</strong>,</p>
+          <p>The water supply for your area has been opened.</p>
+          
+          <div style="background-color: #dcfce7; padding: 20px; border-radius: 8px; margin: 20px 0;">
+            <h3 style="color: #166534; margin-top: 0;">Supply Details:</h3>
+            <p style="margin: 8px 0;"><strong>Area:</strong> ${area}</p>
+            <p style="margin: 8px 0;"><strong>Schedule ID:</strong> ${scheduleId}</p>
+            <p style="margin: 8px 0;"><strong>Status:</strong> <span style="color: #10b981; font-weight: bold;">OPEN</span></p>
+            <p style="margin: 8px 0;"><strong>Time:</strong> ${new Date().toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Kolkata' })}</p>
+          </div>
+          
+          <div style="background-color: #dbeafe; padding: 15px; border-left: 4px solid #0ea5e9; margin: 20px 0;">
+            <p style="margin: 0; color: #1e40af;"><strong>💡 Reminder:</strong></p>
+            <p style="margin: 10px 0 0 0; color: #1e40af;">Please use water responsibly and store adequate water for your needs.</p>
+          </div>
+          
+          <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 30px 0;">
+          
+          <p style="color: #64748b; font-size: 12px; text-align: center; margin: 0;">
+            Thank you for using Blue Tap Connect<br>
+            For any issues, please contact our support team
+          </p>
+        </div>
+      </div>
+    `;
+    return this.sendEmail({ to, subject, html });
+  }
+
+  async sendWaterSupplyCloseEmail(to: string, userName: string, area: string, scheduleId: string): Promise<boolean> {
+    const subject = `Water Supply Closed - ${area}`;
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9fafb; border-radius: 8px;">
+        <div style="background-color: #ef4444; padding: 20px; border-radius: 8px 8px 0 0; text-align: center;">
+          <h1 style="color: white; margin: 0;">💧 Water Supply Closed</h1>
+        </div>
+        <div style="background-color: white; padding: 30px; border-radius: 0 0 8px 8px;">
+          <h2 style="color: #dc2626; margin-top: 0;">Water Supply Has Been Closed 🚫</h2>
+          <p>Dear <strong>${userName}</strong>,</p>
+          <p>The water supply for your area has been closed.</p>
+          
+          <div style="background-color: #fee2e2; padding: 20px; border-radius: 8px; margin: 20px 0;">
+            <h3 style="color: #991b1b; margin-top: 0;">Supply Details:</h3>
+            <p style="margin: 8px 0;"><strong>Area:</strong> ${area}</p>
+            <p style="margin: 8px 0;"><strong>Schedule ID:</strong> ${scheduleId}</p>
+            <p style="margin: 8px 0;"><strong>Status:</strong> <span style="color: #dc2626; font-weight: bold;">CLOSED</span></p>
+            <p style="margin: 8px 0;"><strong>Time:</strong> ${new Date().toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Kolkata' })}</p>
+          </div>
+          
+          <div style="background-color: #dbeafe; padding: 15px; border-left: 4px solid #0ea5e9; margin: 20px 0;">
+            <p style="margin: 0; color: #1e40af;"><strong>ℹ️ Note:</strong></p>
+            <p style="margin: 10px 0 0 0; color: #1e40af;">The next water supply schedule will be notified to you in advance.</p>
+          </div>
+          
+          <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 30px 0;">
+          
+          <p style="color: #64748b; font-size: 12px; text-align: center; margin: 0;">
+            Thank you for using Blue Tap Connect<br>
+            For any issues, please contact our support team
+          </p>
+        </div>
       </div>
     `;
     return this.sendEmail({ to, subject, html });
