@@ -7,7 +7,7 @@ import jwt from 'jsonwebtoken';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
-import WhatsAppService from './whatsapp-service.js';
+import TwilioWhatsAppService from './twilio-whatsapp-service.js';
 import EmailService from './email-service.js';
 
 const app = express();
@@ -74,15 +74,13 @@ const pool = new Pool({
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-this-in-production';
 
-// Initialize WhatsApp service
-const whatsappService = new WhatsAppService();
-// Log essential WhatsApp config presence (without secrets)
-console.log('WhatsApp config:', {
-  apiUrl: process.env.WHATSAPP_API_URL ? 'set' : 'missing',
-  accessToken: process.env.WHATSAPP_ACCESS_TOKEN ? 'set' : 'missing',
-  phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID ? 'set' : 'missing',
-  businessAccountId: process.env.WHATSAPP_BUSINESS_ACCOUNT_ID ? 'set' : 'missing',
-  templateName: process.env.WHATSAPP_TEMPLATE_NAME ? 'set' : 'not set'
+// Initialize Twilio WhatsApp service
+const whatsappService = new TwilioWhatsAppService();
+// Log essential Twilio WhatsApp config presence (without secrets)
+console.log('Twilio WhatsApp config:', {
+  accountSid: process.env.TWILIO_ACCOUNT_SID ? 'set' : 'missing',
+  authToken: process.env.TWILIO_AUTH_TOKEN ? 'set' : 'missing',
+  whatsappFrom: process.env.TWILIO_WHATSAPP_FROM ? 'set' : 'missing'
 });
 
 // Initialize Email service
@@ -464,7 +462,7 @@ app.post('/api/reports', authenticateToken, upload.single('photo'), async (req: 
           const html = `
             <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9fafb; border-radius: 8px;">
               <div style="background-color: #0ea5e9; padding: 20px; border-radius: 8px 8px 0 0; text-align: center;">
-                <h1 style="color: white; margin: 0;">Blue Tap Connect</h1>
+                <h1 style="color: white; margin: 0;">BlueGrid</h1>
               </div>
               <div style="background-color: white; padding: 30px; border-radius: 0 0 8px 8px;">
                 <h2 style="color: #0ea5e9; margin-top: 0;">Report Submitted Successfully! ✅</h2>
@@ -504,7 +502,7 @@ app.post('/api/reports', authenticateToken, upload.single('photo'), async (req: 
                 <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 30px 0;">
                 
                 <p style="color: #64748b; font-size: 12px; text-align: center; margin: 0;">
-                  Thank you for using Blue Tap Connect<br>
+                  Thank you for using BlueGrid<br>
                   For any questions, please contact our support team
                 </p>
               </div>
@@ -521,6 +519,69 @@ app.post('/api/reports', authenticateToken, upload.single('photo'), async (req: 
             console.log('✅ Email notification sent successfully to:', userEmail);
           } else {
             console.error('❌ Failed to send email notification to:', userEmail);
+          }
+        }
+
+        // Send email to all Panchayat Officers
+        const officersResult = await pool.query(
+          'SELECT u.email, p.full_name FROM users u JOIN profiles p ON u.id = p.id WHERE p.role = $1',
+          ['panchayat_officer']
+        );
+
+        if (officersResult.rows.length > 0) {
+          for (const officer of officersResult.rows) {
+            const officerSubject = `New Report Submitted - ID: ${createdReport.id}`;
+            const officerHtml = `
+              <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9fafb; border-radius: 8px;">
+                <div style="background-color: #0ea5e9; padding: 20px; border-radius: 8px 8px 0 0; text-align: center;">
+                  <h1 style="color: white; margin: 0;">BlueGrid</h1>
+                </div>
+                <div style="background-color: white; padding: 30px; border-radius: 0 0 8px 8px;">
+                  <h2 style="color: #f59e0b; margin-top: 0;">New Report Submitted 📋</h2>
+                  <p>Dear <strong>${officer.full_name}</strong>,</p>
+                  <p>A new water pipe issue report has been submitted and requires your attention.</p>
+                  
+                  <div style="background-color: #f1f5f9; padding: 20px; border-radius: 8px; margin: 20px 0;">
+                    <h3 style="color: #334155; margin-top: 0;">Report Details:</h3>
+                    <p style="margin: 8px 0;"><strong>Report ID:</strong> ${createdReport.id}</p>
+                    <p style="margin: 8px 0;"><strong>Status:</strong> <span style="color: #f59e0b; font-weight: bold;">Pending</span></p>
+                    <p style="margin: 8px 0;"><strong>Submitted By:</strong> ${full_name}</p>
+                    <p style="margin: 8px 0;"><strong>Contact:</strong> ${mobile_number}</p>
+                    <p style="margin: 8px 0;"><strong>Location:</strong> ${location_name || 'Not specified'}</p>
+                    ${notes ? `<p style="margin: 8px 0;"><strong>Notes:</strong> ${notes}</p>` : ''}
+                    <p style="margin: 8px 0;"><strong>Submitted On:</strong> ${new Date().toLocaleString()}</p>
+                  </div>
+                  
+                  <div style="background-color: #fef3c7; padding: 15px; border-left: 4px solid #f59e0b; margin: 20px 0;">
+                    <p style="margin: 0; color: #92400e;"><strong>Action Required:</strong></p>
+                    <ul style="color: #92400e; margin: 10px 0;">
+                      <li>Review the report details</li>
+                      <li>Assign a maintenance technician</li>
+                      <li>Monitor the progress until completion</li>
+                    </ul>
+                  </div>
+                  
+                  <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 30px 0;">
+                  
+                  <p style="color: #64748b; font-size: 12px; text-align: center; margin: 0;">
+                    BlueGrid - Panchayat Officer Dashboard<br>
+                    Please log in to assign a technician
+                  </p>
+                </div>
+              </div>
+            `;
+
+            const officerEmailSuccess = await emailService.sendEmail({
+              to: officer.email,
+              subject: officerSubject,
+              html: officerHtml
+            });
+
+            if (officerEmailSuccess) {
+              console.log('✅ Report notification sent to Panchayat Officer:', officer.email);
+            } else {
+              console.error('❌ Failed to send notification to Panchayat Officer:', officer.email);
+            }
           }
         }
       } catch (emailError) {
@@ -576,9 +637,16 @@ app.get('/api/reports/all', authenticateToken, async (req: any, res) => {
       return res.status(403).json({ error: 'Access denied. Panchayat Officer role required.' });
     }
 
-    // Query the base table directly to ensure we get all columns
+    // Query with JOIN to get technician name
     const result = await pool.query(
-      'SELECT * FROM pipe_reports ORDER BY created_at DESC'
+      `SELECT 
+        r.*,
+        t.full_name as technician_name,
+        a.full_name as approved_by_name
+      FROM pipe_reports r
+      LEFT JOIN profiles t ON r.assigned_technician_id = t.id
+      LEFT JOIN profiles a ON r.approved_by = a.id
+      ORDER BY r.created_at DESC`
     );
 
     res.json(result.rows);
@@ -774,22 +842,23 @@ app.put('/api/reports/:reportId/assign', authenticateToken, async (req: any, res
         );
         
         const technicianResult = await pool.query(
-          'SELECT p.full_name, p.phone FROM profiles p WHERE p.id = $1',
+          'SELECT u.email, p.full_name, p.phone FROM users u JOIN profiles p ON u.id = p.id WHERE p.id = $1',
           [assigned_technician_id]
         );
         
         if (reporterResult.rows.length > 0 && technicianResult.rows.length > 0) {
           const reporterEmail = reporterResult.rows[0].email;
+          const technicianEmail = technicianResult.rows[0].email;
           const technicianName = technicianResult.rows[0].full_name;
           const technicianPhone = technicianResult.rows[0].phone || 'Not provided';
           
-          console.log('Sending assignment email to:', reporterEmail);
+          console.log('Sending assignment email to reporter:', reporterEmail);
           
           const subject = `Technician Assigned - Report ID: ${updatedReport.id}`;
           const html = `
             <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9fafb; border-radius: 8px;">
               <div style="background-color: #0ea5e9; padding: 20px; border-radius: 8px 8px 0 0; text-align: center;">
-                <h1 style="color: white; margin: 0;">Blue Tap Connect</h1>
+                <h1 style="color: white; margin: 0;">BlueGrid</h1>
               </div>
               <div style="background-color: white; padding: 30px; border-radius: 0 0 8px 8px;">
                 <h2 style="color: #10b981; margin-top: 0;">Technician Assigned to Your Report! 👨‍🔧</h2>
@@ -821,7 +890,7 @@ app.put('/api/reports/:reportId/assign', authenticateToken, async (req: any, res
                 <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 30px 0;">
                 
                 <p style="color: #64748b; font-size: 12px; text-align: center; margin: 0;">
-                  Thank you for using Blue Tap Connect<br>
+                  Thank you for using BlueGrid<br>
                   For any questions, please contact our support team
                 </p>
               </div>
@@ -835,9 +904,64 @@ app.put('/api/reports/:reportId/assign', authenticateToken, async (req: any, res
           });
           
           if (emailSuccess) {
-            console.log('✅ Assignment email sent successfully to:', reporterEmail);
+            console.log('✅ Assignment email sent successfully to reporter:', reporterEmail);
           } else {
-            console.error('❌ Failed to send assignment email to:', reporterEmail);
+            console.error('❌ Failed to send assignment email to reporter:', reporterEmail);
+          }
+
+          // Send email to technician
+          console.log('Sending assignment email to technician:', technicianEmail);
+          const techSubject = `New Report Assigned to You - Report ID: ${updatedReport.id}`;
+          const techHtml = `
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9fafb; border-radius: 8px;">
+              <div style="background-color: #0ea5e9; padding: 20px; border-radius: 8px 8px 0 0; text-align: center;">
+                <h1 style="color: white; margin: 0;">BlueGrid</h1>
+              </div>
+              <div style="background-color: white; padding: 30px; border-radius: 0 0 8px 8px;">
+                <h2 style="color: #0ea5e9; margin-top: 0;">New Report Assigned to You! 🔧</h2>
+                <p>Dear <strong>${technicianName}</strong>,</p>
+                <p>A new water pipe repair report has been assigned to you by the Panchayat Officer.</p>
+                
+                <div style="background-color: #f1f5f9; padding: 20px; border-radius: 8px; margin: 20px 0;">
+                  <h3 style="color: #334155; margin-top: 0;">Report Details:</h3>
+                  <p style="margin: 8px 0;"><strong>Report ID:</strong> ${updatedReport.id}</p>
+                  <p style="margin: 8px 0;"><strong>Status:</strong> <span style="color: #f59e0b; font-weight: bold;">Assigned</span></p>
+                  <p style="margin: 8px 0;"><strong>Reporter:</strong> ${updatedReport.full_name}</p>
+                  <p style="margin: 8px 0;"><strong>Contact:</strong> ${updatedReport.mobile_number}</p>
+                  <p style="margin: 8px 0;"><strong>Location:</strong> ${updatedReport.location_name || updatedReport.address}</p>
+                  ${updatedReport.notes ? `<p style="margin: 8px 0;"><strong>Notes:</strong> ${updatedReport.notes}</p>` : ''}
+                </div>
+                
+                <div style="background-color: #dbeafe; padding: 15px; border-left: 4px solid #0ea5e9; margin: 20px 0;">
+                  <p style="margin: 0; color: #1e40af;"><strong>Action Required:</strong></p>
+                  <ul style="color: #1e40af; margin: 10px 0;">
+                    <li>Please log in to the app to accept this assignment</li>
+                    <li>Review the report details and location</li>
+                    <li>Visit the site and complete the repair work</li>
+                    <li>Update the status when work is completed</li>
+                  </ul>
+                </div>
+                
+                <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 30px 0;">
+                
+                <p style="color: #64748b; font-size: 12px; text-align: center; margin: 0;">
+                  Thank you for your service<br>
+                  BlueGrid Team
+                </p>
+              </div>
+            </div>
+          `;
+          
+          const techEmailSuccess = await emailService.sendEmail({
+            to: technicianEmail,
+            subject: techSubject,
+            html: techHtml
+          });
+          
+          if (techEmailSuccess) {
+            console.log('✅ Assignment email sent successfully to technician:', technicianEmail);
+          } else {
+            console.error('❌ Failed to send assignment email to technician:', technicianEmail);
           }
         }
       } catch (emailError) {
@@ -1030,7 +1154,7 @@ app.put('/api/reports/:reportId/approve', authenticateToken, async (req: any, re
           const html = `
             <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9fafb; border-radius: 8px;">
               <div style="background-color: #10b981; padding: 20px; border-radius: 8px 8px 0 0; text-align: center;">
-                <h1 style="color: white; margin: 0;">Blue Tap Connect</h1>
+                <h1 style="color: white; margin: 0;">BlueGrid</h1>
               </div>
               <div style="background-color: white; padding: 30px; border-radius: 0 0 8px 8px;">
                 <h2 style="color: #10b981; margin-top: 0;">Report Approved! ✅</h2>
@@ -1052,7 +1176,7 @@ app.put('/api/reports/:reportId/approve', authenticateToken, async (req: any, re
                 </div>
                 
                 <p style="color: #64748b; font-size: 14px; margin-top: 30px;">
-                  Thank you for using Blue Tap Connect. We're here to serve you!
+                  Thank you for using BlueGrid. We're here to serve you!
                 </p>
               </div>
             </div>
@@ -1075,7 +1199,7 @@ app.put('/api/reports/:reportId/approve', authenticateToken, async (req: any, re
           const html = `
             <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9fafb; border-radius: 8px;">
               <div style="background-color: #ef4444; padding: 20px; border-radius: 8px 8px 0 0; text-align: center;">
-                <h1 style="color: white; margin: 0;">Blue Tap Connect</h1>
+                <h1 style="color: white; margin: 0;">BlueGrid</h1>
               </div>
               <div style="background-color: white; padding: 30px; border-radius: 0 0 8px 8px;">
                 <h2 style="color: #ef4444; margin-top: 0;">Report Requires Additional Work</h2>
@@ -1366,7 +1490,7 @@ app.put('/api/reports/:reportId/accept', authenticateToken, async (req: any, res
         const html = `
           <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9fafb; border-radius: 8px;">
             <div style="background-color: #0ea5e9; padding: 20px; border-radius: 8px 8px 0 0; text-align: center;">
-              <h1 style="color: white; margin: 0;">Blue Tap Connect</h1>
+              <h1 style="color: white; margin: 0;">BlueGrid</h1>
             </div>
             <div style="background-color: white; padding: 30px; border-radius: 0 0 8px 8px;">
               <h2 style="color: #0ea5e9; margin-top: 0;">Technician Started Working! 🔧</h2>
@@ -1528,18 +1652,21 @@ app.post('/api/schedules/create', authenticateToken, async (req: any, res) => {
     // Send response immediately
     res.json(createdSchedule);
 
-    // Send email notification asynchronously
-    if (user_id) {
-      setImmediate(async () => {
-        try {
-          // Get resident's email and details
-          const residentResult = await pool.query(
-            'SELECT u.email, p.full_name, p.address FROM users u JOIN profiles p ON u.id = p.id WHERE u.id = $1',
-            [user_id]
-          );
+    // Send email notification asynchronously to all residents in the area
+    setImmediate(async () => {
+      try {
+        // Get all residents in the area (or all residents if no specific area filter)
+        const residentsQuery = user_id 
+          ? 'SELECT u.email, p.full_name, p.address, p.phone FROM users u JOIN profiles p ON u.id = p.id WHERE u.id = $1 AND p.role = $2'
+          : 'SELECT u.email, p.full_name, p.address, p.phone FROM users u JOIN profiles p ON u.id = p.id WHERE p.role = $1';
+        
+        const residentsParams = user_id ? [user_id, 'resident'] : ['resident'];
+        const residentsResult = await pool.query(residentsQuery, residentsParams);
 
-          if (residentResult.rows.length > 0) {
-            const resident = residentResult.rows[0];
+        if (residentsResult.rows.length > 0) {
+          console.log(`Sending schedule notification to ${residentsResult.rows.length} resident(s)`);
+          
+          for (const resident of residentsResult.rows) {
             
             // Format times for display
             const openTime = new Date(scheduled_open_time).toLocaleString('en-IN', {
@@ -1557,7 +1684,7 @@ app.post('/api/schedules/create', authenticateToken, async (req: any, res) => {
             const html = `
               <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9fafb; border-radius: 8px;">
                 <div style="background-color: #0ea5e9; padding: 20px; border-radius: 8px 8px 0 0; text-align: center;">
-                  <h1 style="color: white; margin: 0;">💧 Blue Tap Connect</h1>
+                  <h1 style="color: white; margin: 0;">💧 BlueGrid</h1>
                 </div>
                 <div style="background-color: white; padding: 30px; border-radius: 0 0 8px 8px;">
                   <h2 style="color: #0ea5e9; margin-top: 0;">Water Supply Schedule Created</h2>
@@ -1585,7 +1712,7 @@ app.post('/api/schedules/create', authenticateToken, async (req: any, res) => {
                   <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 30px 0;">
                   
                   <p style="color: #64748b; font-size: 12px; text-align: center; margin: 0;">
-                    Thank you for using Blue Tap Connect<br>
+                    Thank you for using BlueGrid<br>
                     For any questions, please contact our support team
                   </p>
                 </div>
@@ -1601,14 +1728,48 @@ app.post('/api/schedules/create', authenticateToken, async (req: any, res) => {
             if (emailSuccess) {
               console.log('✅ Schedule notification email sent to:', resident.email);
             } else {
-              console.error('❌ Failed to send schedule notification email');
+              console.error('❌ Failed to send schedule notification email to:', resident.email);
+            }
+
+            // Send WhatsApp notification
+            if (resident.phone) {
+              const whatsappMessage = `💧 *BlueGrid - Water Supply Schedule*
+
+Hello ${resident.full_name}!
+
+A new water supply schedule has been created for your area.
+
+📋 *Schedule Details:*
+• Area: ${area}
+• Opens: ${openTime}
+• Closes: ${closeTime}
+
+📌 *Important:*
+• Please ensure your taps are ready during the scheduled time
+• Store sufficient water for your needs
+• Report any issues immediately through the app
+
+*BlueGrid Team*`;
+
+              const whatsappResult = await whatsappService.sendNotification(
+                resident.phone,
+                whatsappMessage
+              );
+
+              if (whatsappResult.success) {
+                console.log('✅ Schedule notification WhatsApp sent to:', resident.phone);
+              } else {
+                console.error('❌ Failed to send schedule notification WhatsApp to:', resident.phone);
+              }
             }
           }
-        } catch (emailError) {
-          console.error('Email notification error for schedule:', emailError);
+        } else {
+          console.log('No residents found to notify');
         }
-      });
-    }
+      } catch (emailError) {
+        console.error('Email notification error for schedule:', emailError);
+      }
+    });
   } catch (error) {
     console.error('Create schedule error:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -1651,19 +1812,20 @@ app.put('/api/schedules/:scheduleId/open', authenticateToken, async (req: any, r
     // Send response immediately
     res.json(openedSchedule);
 
-    // Send email notification asynchronously
+    // Send email and WhatsApp notifications asynchronously
     setImmediate(async () => {
       try {
-        // Get resident email if user_id is set
+        // Get resident details if user_id is set
         if (openedSchedule.user_id) {
           const residentResult = await pool.query(
-            'SELECT u.email, p.full_name FROM users u JOIN profiles p ON u.id = p.id WHERE u.id = $1',
+            'SELECT u.email, p.full_name, p.phone FROM users u JOIN profiles p ON u.id = p.id WHERE u.id = $1',
             [openedSchedule.user_id]
           );
 
           if (residentResult.rows.length > 0) {
             const resident = residentResult.rows[0];
             
+            // Send email notification
             const emailSuccess = await emailService.sendWaterSupplyOpenEmail(
               resident.email,
               resident.full_name,
@@ -1676,10 +1838,32 @@ app.put('/api/schedules/:scheduleId/open', authenticateToken, async (req: any, r
             } else {
               console.error('❌ Failed to send water supply open email to:', resident.email);
             }
+
+            // Send WhatsApp notification
+            if (resident.phone) {
+              const whatsappMessage = whatsappService.generateWaterSupplyMessage({
+                userName: resident.full_name,
+                area: openedSchedule.area,
+                status: 'open',
+                scheduleId: scheduleId,
+                time: new Date().toLocaleString('en-IN')
+              });
+
+              const whatsappResult = await whatsappService.sendNotification(
+                resident.phone,
+                whatsappMessage
+              );
+
+              if (whatsappResult.success) {
+                console.log('✅ Water supply open WhatsApp sent to:', resident.phone);
+              } else {
+                console.error('❌ Failed to send water supply open WhatsApp to:', resident.phone);
+              }
+            }
           }
         }
-      } catch (emailError) {
-        console.error('Email notification error for water supply open:', emailError);
+      } catch (error) {
+        console.error('Notification error for water supply open:', error);
       }
     });
   } catch (error) {
@@ -1724,19 +1908,20 @@ app.put('/api/schedules/:scheduleId/close', authenticateToken, async (req: any, 
     // Send response immediately
     res.json(closedSchedule);
 
-    // Send email notification asynchronously
+    // Send email and WhatsApp notifications asynchronously
     setImmediate(async () => {
       try {
-        // Get resident email if user_id is set
+        // Get resident details if user_id is set
         if (closedSchedule.user_id) {
           const residentResult = await pool.query(
-            'SELECT u.email, p.full_name FROM users u JOIN profiles p ON u.id = p.id WHERE u.id = $1',
+            'SELECT u.email, p.full_name, p.phone FROM users u JOIN profiles p ON u.id = p.id WHERE u.id = $1',
             [closedSchedule.user_id]
           );
 
           if (residentResult.rows.length > 0) {
             const resident = residentResult.rows[0];
             
+            // Send email notification
             const emailSuccess = await emailService.sendWaterSupplyCloseEmail(
               resident.email,
               resident.full_name,
@@ -1749,10 +1934,32 @@ app.put('/api/schedules/:scheduleId/close', authenticateToken, async (req: any, 
             } else {
               console.error('❌ Failed to send water supply close email to:', resident.email);
             }
+
+            // Send WhatsApp notification
+            if (resident.phone) {
+              const whatsappMessage = whatsappService.generateWaterSupplyMessage({
+                userName: resident.full_name,
+                area: closedSchedule.area,
+                status: 'close',
+                scheduleId: scheduleId,
+                time: new Date().toLocaleString('en-IN')
+              });
+
+              const whatsappResult = await whatsappService.sendNotification(
+                resident.phone,
+                whatsappMessage
+              );
+
+              if (whatsappResult.success) {
+                console.log('✅ Water supply close WhatsApp sent to:', resident.phone);
+              } else {
+                console.error('❌ Failed to send water supply close WhatsApp to:', resident.phone);
+              }
+            }
           }
         }
-      } catch (emailError) {
-        console.error('Email notification error for water supply close:', emailError);
+      } catch (error) {
+        console.error('Notification error for water supply close:', error);
       }
     });
   } catch (error) {
@@ -1877,7 +2084,7 @@ app.put('/api/reports/:reportId/complete', authenticateToken, upload.single('com
         const html = `
           <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9fafb; border-radius: 8px;">
             <div style="background-color: #0ea5e9; padding: 20px; border-radius: 8px 8px 0 0; text-align: center;">
-              <h1 style="color: white; margin: 0;">Blue Tap Connect</h1>
+              <h1 style="color: white; margin: 0;">BlueGrid</h1>
             </div>
             <div style="background-color: white; padding: 30px; border-radius: 0 0 8px 8px;">
               <h2 style="color: #10b981; margin-top: 0;">Work Completed on Your Report! ✅</h2>
@@ -1916,7 +2123,7 @@ app.put('/api/reports/:reportId/complete', authenticateToken, upload.single('com
               <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 30px 0;">
               
               <p style="color: #64748b; font-size: 12px; text-align: center; margin: 0;">
-                Thank you for using Blue Tap Connect<br>
+                Thank you for using BlueGrid<br>
                 For any questions, please contact our support team
               </p>
             </div>
@@ -1930,9 +2137,80 @@ app.put('/api/reports/:reportId/complete', authenticateToken, upload.single('com
         });
         
         if (emailSuccess) {
-          console.log('✅ Completion email sent successfully to:', reporterEmail);
+          console.log('✅ Completion email sent successfully to reporter:', reporterEmail);
         } else {
-          console.error('❌ Failed to send completion email to:', reporterEmail);
+          console.error('❌ Failed to send completion email to reporter:', reporterEmail);
+        }
+      }
+
+      // Send email to all Panchayat Officers
+      const officersResult = await pool.query(
+        'SELECT u.email, p.full_name FROM users u JOIN profiles p ON u.id = p.id WHERE p.role = $1',
+        ['panchayat_officer']
+      );
+
+      if (officersResult.rows.length > 0) {
+        const technicianName = technicianResult.rows.length > 0 ? technicianResult.rows[0].full_name : 'Technician';
+        const reporterName = reporterResult.rows.length > 0 ? reporterResult.rows[0].full_name : 'Resident';
+        const locationName = reporterResult.rows.length > 0 ? (reporterResult.rows[0].location_name || reporterResult.rows[0].address) : 'Location';
+
+        for (const officer of officersResult.rows) {
+          const officerSubject = `Work Completed - Report ID: ${completedReport.id} Awaiting Approval`;
+          const officerHtml = `
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9fafb; border-radius: 8px;">
+              <div style="background-color: #0ea5e9; padding: 20px; border-radius: 8px 8px 0 0; text-align: center;">
+                <h1 style="color: white; margin: 0;">BlueGrid</h1>
+              </div>
+              <div style="background-color: white; padding: 30px; border-radius: 0 0 8px 8px;">
+                <h2 style="color: #10b981; margin-top: 0;">Work Completed - Approval Required ✅</h2>
+                <p>Dear <strong>${officer.full_name}</strong>,</p>
+                <p>A maintenance technician has completed work on a report and it is now awaiting your approval.</p>
+                
+                <div style="background-color: #f1f5f9; padding: 20px; border-radius: 8px; margin: 20px 0;">
+                  <h3 style="color: #334155; margin-top: 0;">Report Details:</h3>
+                  <p style="margin: 8px 0;"><strong>Report ID:</strong> ${completedReport.id}</p>
+                  <p style="margin: 8px 0;"><strong>Status:</strong> <span style="color: #f59e0b; font-weight: bold;">Awaiting Approval</span></p>
+                  <p style="margin: 8px 0;"><strong>Reporter:</strong> ${reporterName}</p>
+                  <p style="margin: 8px 0;"><strong>Location:</strong> ${locationName}</p>
+                  <p style="margin: 8px 0;"><strong>Completed By:</strong> ${technicianName}</p>
+                  <p style="margin: 8px 0;"><strong>Completion Date:</strong> ${new Date().toLocaleString()}</p>
+                </div>
+                
+                <div style="background-color: #dcfce7; padding: 20px; border-radius: 8px; margin: 20px 0;">
+                  <h3 style="color: #166534; margin-top: 0;">Completion Notes:</h3>
+                  <p style="margin: 0; color: #166534;">${completion_notes}</p>
+                </div>
+                
+                <div style="background-color: #fef3c7; padding: 15px; border-left: 4px solid #f59e0b; margin: 20px 0;">
+                  <p style="margin: 0; color: #92400e;"><strong>Action Required:</strong></p>
+                  <ul style="color: #92400e; margin: 10px 0;">
+                    <li>Review the completion notes</li>
+                    <li>Verify the work has been completed satisfactorily</li>
+                    <li>Approve or reject the completion</li>
+                  </ul>
+                </div>
+                
+                <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 30px 0;">
+                
+                <p style="color: #64748b; font-size: 12px; text-align: center; margin: 0;">
+                  BlueGrid - Panchayat Officer Dashboard<br>
+                  Please log in to approve or reject this completion
+                </p>
+              </div>
+            </div>
+          `;
+
+          const officerEmailSuccess = await emailService.sendEmail({
+            to: officer.email,
+            subject: officerSubject,
+            html: officerHtml
+          });
+
+          if (officerEmailSuccess) {
+            console.log('✅ Completion notification sent to Panchayat Officer:', officer.email);
+          } else {
+            console.error('❌ Failed to send completion notification to Panchayat Officer:', officer.email);
+          }
         }
       }
     } catch (emailError) {
