@@ -1,0 +1,20 @@
+{
+  "name": "bluegrid-blockchain",
+  "description": "Blockchain dependencies for BlueGrid",
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^4.0.0",
+    "@openzeppelin/contracts": "^5.0.0",
+    "hardhat": "^2.19.0"
+  },
+  "dependencies": {
+    "ethers": "^6.9.0",
+    "ipfs-http-client": "^60.0.1"
+  },
+  "scripts": {
+    "blockchain:compile": "hardhat compile",
+    "blockchain:test": "hardhat test",
+    "blockchain:deploy:mumbai": "hardhat run scripts/deploy.ts --network mumbai",
+    "blockchain:deploy:polygon": "hardhat run scripts/deploy.ts --network polygon",
+    "blockchain:verify": "hardhat verify --network"
+  }
+}

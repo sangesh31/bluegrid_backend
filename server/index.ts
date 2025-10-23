@@ -46,7 +46,20 @@ const upload = multer({
 });
 
 // Middleware
-app.use(cors());
+app.use(cors({
+  origin: [
+    'http://localhost:5173',
+    'http://localhost:3000',
+    'http://localhost:8080',
+    'http://localhost:8081',
+    'http://localhost:8082',
+    'https://web-production-d3e72.up.railway.app',
+    /\.netlify\.app$/  // Allow all Netlify domains
+  ],
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
 // Parse JSON for most routes
 app.use(express.json());
 // Parse URL-encoded bodies (for form data)
@@ -176,6 +189,141 @@ app.get('/api/ping', (req, res) => {
 });
 
 // Auth endpoints
+// Store OTPs temporarily (in production, use Redis)
+const otpStore = new Map<string, { otp: string; expires: number; userData: any }>();
+
+// Send OTP endpoint
+app.post('/api/auth/send-otp', async (req, res) => {
+  try {
+    const { email, fullName } = req.body;
+    
+    if (!email) {
+      return res.status(400).json({ error: 'Email is required' });
+    }
+
+    // Check if email already exists
+    const existingUser = await pool.query(
+      'SELECT id FROM users WHERE email = $1',
+      [email]
+    );
+
+    if (existingUser.rows.length > 0) {
+      return res.status(400).json({ error: 'Email already registered' });
+    }
+
+    // Generate 6-digit OTP
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    
+    // Store OTP (expires in 10 minutes)
+    otpStore.set(email, {
+      otp,
+      expires: Date.now() + 10 * 60 * 1000,
+      userData: req.body
+    });
+
+    console.log(`OTP for ${email}: ${otp}`); // For development - remove in production
+
+    // Send OTP email
+    const emailSent = await emailService.sendEmail({
+      to: email,
+      subject: 'BlueGrid - Email Verification OTP',
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+          <h2 style="color: #1e40af; text-align: center;">BlueGrid Water Management</h2>
+          <p>Hello ${fullName || 'User'},</p>
+          <p>Your OTP for email verification is:</p>
+          <div style="background: #f3f4f6; padding: 20px; text-align: center; font-size: 32px; font-weight: bold; letter-spacing: 5px; margin: 20px 0; border-radius: 8px;">
+            ${otp}
+          </div>
+          <p style="color: #6b7280;">This OTP will expire in 10 minutes.</p>
+          <p style="color: #6b7280;">If you didn't request this, please ignore this email.</p>
+          <hr style="margin: 30px 0; border: none; border-top: 1px solid #e5e7eb;">
+          <p style="color: #9ca3af; font-size: 12px; text-align: center;">BlueGrid Water Management System</p>
+        </div>
+      `
+    });
+
+    res.json({ 
+      success: true, 
+      message: 'OTP sent to your email',
+      expiresIn: 600
+    });
+  } catch (error) {
+    console.error('Send OTP error:', error);
+    res.status(500).json({ error: 'Failed to send OTP' });
+  }
+});
+
+// Verify OTP and create account
+app.post('/api/auth/verify-otp-signup', async (req, res) => {
+  try {
+    const { email, otp, password, fullName, phone, address } = req.body;
+    
+    if (!email || !otp) {
+      return res.status(400).json({ error: 'Email and OTP are required' });
+    }
+
+    // Check OTP
+    const storedData = otpStore.get(email);
+    
+    if (!storedData) {
+      return res.status(400).json({ error: 'OTP expired or not found' });
+    }
+
+    if (Date.now() > storedData.expires) {
+      otpStore.delete(email);
+      return res.status(400).json({ error: 'OTP expired' });
+    }
+
+    if (storedData.otp !== otp) {
+      return res.status(400).json({ error: 'Invalid OTP' });
+    }
+
+    // OTP verified, delete it
+    otpStore.delete(email);
+
+    // Hash password
+    const passwordHash = await bcrypt.hash(password, 10);
+
+    // Insert user
+    const userResult = await pool.query(
+      'INSERT INTO users (email, password_hash, email_verified) VALUES ($1, $2, $3) RETURNING id, email, created_at, email_verified',
+      [email, passwordHash, true]
+    );
+
+    const user = userResult.rows[0];
+
+    // Create profile
+    await pool.query(
+      'INSERT INTO profiles (id, full_name, phone, address, role) VALUES ($1, $2, $3, $4, $5)',
+      [user.id, fullName, phone || null, address || null, 'resident']
+    );
+
+    // Create JWT token
+    const token = jwt.sign({ userId: user.id, email: user.email }, JWT_SECRET, {
+      expiresIn: '7d',
+    });
+
+    // Calculate expiration
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + 7);
+
+    // Store session
+    await pool.query(
+      'INSERT INTO sessions (user_id, token, expires_at) VALUES ($1, $2, $3)',
+      [user.id, token, expiresAt.toISOString()]
+    );
+
+    res.json({ user, token, expiresAt: expiresAt.toISOString() });
+  } catch (error: any) {
+    console.error('Verify OTP signup error:', error);
+    if (error.code === '23505') {
+      return res.status(400).json({ error: 'Email already exists' });
+    }
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 app.post('/api/auth/signup', async (req, res) => {
   try {
     const { email, password, fullName, phone, address } = req.body;
@@ -1411,6 +1559,120 @@ app.post('/api/users/create-staff', authenticateToken, async (req: any, res) => 
   }
 });
 
+// Delete user (Panchayat Officer only)
+app.delete('/api/users/:userId', authenticateToken, async (req: any, res) => {
+  try {
+    // Check if user is panchayat officer
+    const userProfile = await pool.query(
+      'SELECT role FROM profiles WHERE id = $1',
+      [req.user.userId]
+    );
+
+    if (userProfile.rows.length === 0 || userProfile.rows[0].role !== 'panchayat_officer') {
+      return res.status(403).json({ error: 'Access denied. Panchayat Officer role required.' });
+    }
+
+    const { userId } = req.params;
+
+    // Check if the user exists and get their role
+    const targetUser = await pool.query(
+      'SELECT role FROM profiles WHERE id = $1',
+      [userId]
+    );
+
+    if (targetUser.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const targetRole = targetUser.rows[0].role;
+
+    // Prevent deletion of panchayat officers and residents
+    if (targetRole === 'panchayat_officer') {
+      return res.status(403).json({ error: 'Cannot delete panchayat officers' });
+    }
+
+    if (targetRole === 'resident') {
+      return res.status(403).json({ error: 'Cannot delete residents. Residents can only delete their own accounts.' });
+    }
+
+    // Only allow deletion of maintenance_technician and water_flow_controller
+    if (!['maintenance_technician', 'water_flow_controller'].includes(targetRole)) {
+      return res.status(403).json({ error: 'Invalid user role for deletion' });
+    }
+
+    // Check for active assignments (for technicians)
+    if (targetRole === 'maintenance_technician') {
+      const activeReports = await pool.query(
+        'SELECT COUNT(*) FROM pipe_reports WHERE assigned_technician_id = $1 AND status NOT IN ($2, $3, $4)',
+        [userId, 'approved', 'rejected', 'completed']
+      );
+      
+      if (parseInt(activeReports.rows[0].count) > 0) {
+        return res.status(400).json({ 
+          error: 'Cannot delete technician with active assignments. Please reassign or complete all tasks first.' 
+        });
+      }
+    }
+
+    // Check for active schedules (for water controllers)
+    if (targetRole === 'water_flow_controller') {
+      const activeSchedules = await pool.query(
+        'SELECT COUNT(*) FROM water_schedules WHERE controller_id = $1 AND is_active = true',
+        [userId]
+      );
+      
+      if (parseInt(activeSchedules.rows[0].count) > 0) {
+        return res.status(400).json({ 
+          error: 'Cannot delete controller with active schedules. Please close all schedules first.' 
+        });
+      }
+    }
+
+    // Start transaction
+    await pool.query('BEGIN');
+
+    try {
+      // Unassign from any completed/approved reports (set to NULL instead of deleting reports)
+      await pool.query(
+        'UPDATE pipe_reports SET assigned_technician_id = NULL WHERE assigned_technician_id = $1',
+        [userId]
+      );
+
+      // Update water schedules to remove controller reference
+      await pool.query(
+        'UPDATE water_schedules SET controller_id = NULL WHERE controller_id = $1',
+        [userId]
+      );
+
+      // Delete from profiles first (due to foreign key constraint)
+      await pool.query('DELETE FROM profiles WHERE id = $1', [userId]);
+      
+      // Delete from users
+      await pool.query('DELETE FROM users WHERE id = $1', [userId]);
+
+      // Commit transaction
+      await pool.query('COMMIT');
+
+      res.json({ 
+        message: 'User deleted successfully',
+        deletedUserId: userId 
+      });
+    } catch (deleteError) {
+      // Rollback on error
+      await pool.query('ROLLBACK');
+      throw deleteError;
+    }
+  } catch (error: any) {
+    console.error('Delete user error:', error);
+    console.error('Error details:', error.message);
+    console.error('Error stack:', error.stack);
+    res.status(500).json({ 
+      error: 'Internal server error',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
 // Get all residents (for water flow controller to create schedules)
 app.get('/api/users/residents', authenticateToken, async (req: any, res) => {
   try {
@@ -2363,6 +2625,405 @@ app.post('/api/email/report-status', authenticateToken, async (req: any, res) =>
   } catch (error) {
     console.error('Send report status email error:', error);
     res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Analytics endpoint
+app.get('/api/analytics', authenticateToken, async (req: any, res) => {
+  try {
+    const { startDate, endDate, role, userId } = req.query;
+    
+    if (!startDate || !endDate) {
+      return res.status(400).json({ error: 'Start date and end date are required' });
+    }
+
+    let whereClause = `created_at >= $1 AND created_at <= $2`;
+    const params: any[] = [startDate, `${endDate} 23:59:59`];
+    
+    // Filter by user if resident or technician
+    if (role === 'resident' && userId) {
+      whereClause += ` AND user_id = $3`;
+      params.push(userId);
+    } else if (role === 'maintenance_technician' && userId) {
+      whereClause += ` AND assigned_technician_id = $3`;
+      params.push(userId);
+    }
+
+    // Get total complaints
+    const totalResult = await pool.query(
+      `SELECT COUNT(*) as count FROM pipe_reports WHERE ${whereClause}`,
+      params
+    );
+    const totalComplaints = parseInt(totalResult.rows[0].count);
+
+    // Get complaints by status
+    const statusResult = await pool.query(
+      `SELECT status, COUNT(*) as count FROM pipe_reports WHERE ${whereClause} GROUP BY status`,
+      params
+    );
+
+    // Get complaints by month
+    const monthlyResult = await pool.query(
+      `SELECT 
+        TO_CHAR(created_at, 'Mon YYYY') as month,
+        COUNT(*) as count 
+      FROM pipe_reports 
+      WHERE ${whereClause}
+      GROUP BY TO_CHAR(created_at, 'Mon YYYY'), DATE_TRUNC('month', created_at)
+      ORDER BY DATE_TRUNC('month', created_at)`,
+      params
+    );
+
+    // Calculate average resolution time
+    const resolutionResult = await pool.query(
+      `SELECT 
+        AVG(EXTRACT(EPOCH FROM (completed_at - created_at))/3600) as avg_hours
+      FROM pipe_reports 
+      WHERE ${whereClause} AND completed_at IS NOT NULL`,
+      params
+    );
+
+    const complaintsByStatus = statusResult.rows.map(row => ({
+      status: row.status,
+      count: parseInt(row.count)
+    }));
+
+    const pendingComplaints = complaintsByStatus.find(s => s.status === 'pending')?.count || 0;
+    const completedComplaints = complaintsByStatus.filter(s => 
+      ['completed', 'approved'].includes(s.status)
+    ).reduce((sum, s) => sum + s.count, 0);
+    const approvedComplaints = complaintsByStatus.find(s => s.status === 'approved')?.count || 0;
+    const rejectedComplaints = complaintsByStatus.find(s => s.status === 'rejected')?.count || 0;
+
+    res.json({
+      totalComplaints,
+      pendingComplaints,
+      completedComplaints,
+      approvedComplaints,
+      rejectedComplaints,
+      averageResolutionTime: Math.round(parseFloat(resolutionResult.rows[0]?.avg_hours || '0')),
+      complaintsByMonth: monthlyResult.rows.map(row => ({
+        month: row.month,
+        count: parseInt(row.count)
+      })),
+      complaintsByStatus
+    });
+  } catch (error) {
+    console.error('Analytics error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// 📧📱 NOTIFICATION ENDPOINT - Send Email & WhatsApp
+app.post('/api/notify', async (req, res) => {
+  try {
+    console.log('📬 Notification request received:', req.body);
+    
+    const { email, phone, name, message, subject } = req.body;
+
+    // Validation
+    if (!email && !phone) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'At least one of email or phone is required' 
+      });
+    }
+
+    if (!message) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Message is required' 
+      });
+    }
+
+    const results = {
+      email: { sent: false, error: null },
+      whatsapp: { sent: false, error: null }
+    };
+
+    // Send Email Notification
+    if (email) {
+      try {
+        console.log(`📧 Sending email to: ${email}`);
+        await emailService.sendEmail({
+          to: email,
+          subject: subject || 'Notification from BlueGrid',
+          text: message,
+          html: `
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+              <h2 style="color: #2563eb;">BlueGrid Notification</h2>
+              ${name ? `<p><strong>Hello ${name},</strong></p>` : ''}
+              <p style="font-size: 16px; line-height: 1.6;">${message}</p>
+              <hr style="border: 1px solid #e5e7eb; margin: 20px 0;">
+              <p style="color: #6b7280; font-size: 14px;">
+                This is an automated message from BlueGrid Water Management System.
+              </p>
+            </div>
+          `
+        });
+        results.email.sent = true;
+        console.log('✅ Email sent successfully');
+      } catch (emailError: any) {
+        console.error('❌ Email sending failed:', emailError.message);
+        results.email.error = emailError.message;
+      }
+    }
+
+    // Send WhatsApp Notification
+    if (phone) {
+      try {
+        console.log(`📱 Sending WhatsApp to: ${phone}`);
+        
+        // Format phone number (ensure it has country code)
+        let formattedPhone = phone.replace(/\D/g, ''); // Remove non-digits
+        if (!formattedPhone.startsWith('91') && formattedPhone.length === 10) {
+          formattedPhone = '91' + formattedPhone; // Add India country code
+        }
+        
+        const whatsappMessage = name 
+          ? `Hello ${name},\n\n${message}\n\n- BlueGrid Water Management`
+          : `${message}\n\n- BlueGrid Water Management`;
+
+        await whatsappService.sendWhatsAppMessage(formattedPhone, whatsappMessage);
+        results.whatsapp.sent = true;
+        console.log('✅ WhatsApp sent successfully');
+      } catch (whatsappError: any) {
+        console.error('❌ WhatsApp sending failed:', whatsappError.message);
+        results.whatsapp.error = whatsappError.message;
+      }
+    }
+
+    // Determine overall success
+    const emailSuccess = !email || results.email.sent;
+    const whatsappSuccess = !phone || results.whatsapp.sent;
+    const overallSuccess = emailSuccess && whatsappSuccess;
+
+    if (overallSuccess) {
+      return res.json({
+        success: true,
+        message: 'Notifications sent successfully',
+        results
+      });
+    } else {
+      return res.status(207).json({ // 207 Multi-Status
+        success: false,
+        message: 'Some notifications failed',
+        results
+      });
+    }
+
+  } catch (error: any) {
+    console.error('❌ Notification endpoint error:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Internal server error',
+      details: error.message 
+    });
+  }
+});
+
+// 🧪 TEST ENDPOINT - Test Email Service
+app.post('/api/test-email', async (req, res) => {
+  try {
+    const { email, subject, message } = req.body;
+    
+    if (!email) {
+      return res.status(400).json({ error: 'Email is required' });
+    }
+
+    await emailService.sendEmail({
+      to: email,
+      subject: subject || 'Test Email from BlueGrid',
+      text: message || 'This is a test email from BlueGrid.',
+      html: `<p>${message || 'This is a test email from BlueGrid.'}</p>`
+    });
+
+    res.json({ success: true, message: 'Test email sent successfully' });
+  } catch (error: any) {
+    console.error('Test email error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// 🧪 TEST ENDPOINT - Test WhatsApp Service
+app.post('/api/test-whatsapp', async (req, res) => {
+  try {
+    const { phone, message } = req.body;
+    
+    if (!phone) {
+      return res.status(400).json({ error: 'Phone number is required' });
+    }
+
+    // Format phone number
+    let formattedPhone = phone.replace(/\D/g, '');
+    if (!formattedPhone.startsWith('91') && formattedPhone.length === 10) {
+      formattedPhone = '91' + formattedPhone;
+    }
+
+    await whatsappService.sendWhatsAppMessage(
+      formattedPhone, 
+      message || 'This is a test message from BlueGrid.'
+    );
+
+    res.json({ success: true, message: 'Test WhatsApp sent successfully' });
+  } catch (error: any) {
+    console.error('Test WhatsApp error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ⭐ FEEDBACK SYSTEM - Submit feedback for completed report
+app.post('/api/reports/:id/feedback', authenticateToken, async (req, res) => {
+  try {
+    const reportId = req.params.id;
+    const { rating, comment } = req.body;
+    const userId = (req as any).user.userId;
+
+    // Validate rating
+    if (!rating || rating < 1 || rating > 5) {
+      return res.status(400).json({ error: 'Rating must be between 1 and 5 stars' });
+    }
+
+    // Check if report exists and belongs to user
+    const reportCheck = await pool.query(
+      'SELECT id, user_id, status, has_feedback FROM pipe_reports WHERE id = $1',
+      [reportId]
+    );
+
+    if (reportCheck.rows.length === 0) {
+      return res.status(404).json({ error: 'Report not found' });
+    }
+
+    const report = reportCheck.rows[0];
+
+    // Verify ownership
+    if (report.user_id !== userId) {
+      return res.status(403).json({ error: 'You can only provide feedback for your own reports' });
+    }
+
+    // Check if report is completed or approved
+    if (report.status !== 'completed' && report.status !== 'approved') {
+      return res.status(400).json({ error: 'Feedback can only be submitted for completed or approved reports' });
+    }
+
+    // Check if feedback already submitted
+    if (report.has_feedback) {
+      return res.status(400).json({ error: 'Feedback has already been submitted for this report' });
+    }
+
+    // Submit feedback
+    await pool.query(
+      `UPDATE pipe_reports 
+       SET feedback_rating = $1, 
+           feedback_comment = $2, 
+           feedback_date = NOW(), 
+           has_feedback = TRUE,
+           updated_at = NOW()
+       WHERE id = $3`,
+      [rating, comment || null, reportId]
+    );
+
+    console.log(`⭐ Feedback submitted for report ${reportId}: ${rating} stars`);
+
+    res.json({
+      success: true,
+      message: 'Thank you for your feedback!',
+      feedback: {
+        rating,
+        comment,
+        date: new Date()
+      }
+    });
+  } catch (error) {
+    console.error('Feedback submission error:', error);
+    res.status(500).json({ error: 'Failed to submit feedback' });
+  }
+});
+
+// ⭐ GET FEEDBACK - Get feedback for a specific report
+app.get('/api/reports/:id/feedback', authenticateToken, async (req, res) => {
+  try {
+    const reportId = req.params.id;
+
+    const result = await pool.query(
+      `SELECT feedback_rating, feedback_comment, feedback_date, has_feedback
+       FROM pipe_reports 
+       WHERE id = $1`,
+      [reportId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Report not found' });
+    }
+
+    const feedback = result.rows[0];
+
+    if (!feedback.has_feedback) {
+      return res.json({ hasFeedback: false });
+    }
+
+    res.json({
+      hasFeedback: true,
+      rating: feedback.feedback_rating,
+      comment: feedback.feedback_comment,
+      date: feedback.feedback_date
+    });
+  } catch (error) {
+    console.error('Get feedback error:', error);
+    res.status(500).json({ error: 'Failed to retrieve feedback' });
+  }
+});
+
+// ⭐ GET ALL FEEDBACK - Get feedback statistics (for officers)
+app.get('/api/feedback/statistics', authenticateToken, async (req, res) => {
+  try {
+    // Get average rating
+    const avgResult = await pool.query(
+      `SELECT 
+        AVG(feedback_rating) as average_rating,
+        COUNT(*) as total_feedback,
+        COUNT(CASE WHEN feedback_rating = 5 THEN 1 END) as five_star,
+        COUNT(CASE WHEN feedback_rating = 4 THEN 1 END) as four_star,
+        COUNT(CASE WHEN feedback_rating = 3 THEN 1 END) as three_star,
+        COUNT(CASE WHEN feedback_rating = 2 THEN 1 END) as two_star,
+        COUNT(CASE WHEN feedback_rating = 1 THEN 1 END) as one_star
+       FROM pipe_reports 
+       WHERE has_feedback = TRUE`
+    );
+
+    // Get recent feedback
+    const recentResult = await pool.query(
+      `SELECT 
+        pr.id,
+        pr.location,
+        pr.feedback_rating,
+        pr.feedback_comment,
+        pr.feedback_date,
+        p.full_name as resident_name
+       FROM pipe_reports pr
+       JOIN profiles p ON pr.user_id = p.user_id
+       WHERE pr.has_feedback = TRUE
+       ORDER BY pr.feedback_date DESC
+       LIMIT 10`
+    );
+
+    const stats = avgResult.rows[0];
+
+    res.json({
+      averageRating: parseFloat(stats.average_rating || 0).toFixed(1),
+      totalFeedback: parseInt(stats.total_feedback),
+      distribution: {
+        5: parseInt(stats.five_star),
+        4: parseInt(stats.four_star),
+        3: parseInt(stats.three_star),
+        2: parseInt(stats.two_star),
+        1: parseInt(stats.one_star)
+      },
+      recentFeedback: recentResult.rows
+    });
+  } catch (error) {
+    console.error('Feedback statistics error:', error);
+    res.status(500).json({ error: 'Failed to retrieve feedback statistics' });
   }
 });
 
